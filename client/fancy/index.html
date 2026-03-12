@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>ARAM Simulator — Fancy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#060810;
+  font-family:'Rajdhani', sans-serif;
+  display:flex; flex-direction:column; height:100vh; overflow:hidden;
+  color:#cde;
+}
+
+/* ── HUD ── */
+#hud {
+  display:grid; grid-template-columns:1fr auto 1fr;
+  padding:8px 16px; background:rgba(0,5,20,0.95);
+  border-bottom:1px solid rgba(80,150,255,0.3);
+  align-items:center; flex-shrink:0;
+}
+.team-panel {
+  display:flex; align-items:center; gap:12px;
+  font-size:14px; font-weight:600;
+}
+.team-panel.red { justify-content:flex-end; }
+.team-name { font-family:'Orbitron',sans-serif; font-size:13px; letter-spacing:2px; }
+.blue .team-name { color:#4fc3f7; }
+.red  .team-name { color:#ef5350; }
+.kda  { color:#aaa; font-size:13px; }
+.gold { color:#ffd54f; }
+.lvl  { background:rgba(255,255,255,0.1); padding:2px 7px; border-radius:3px; font-size:12px; }
+
+#clock {
+  text-align:center;
+  font-family:'Orbitron',sans-serif;
+  font-size:22px; color:#e0f7fa;
+  text-shadow:0 0 12px rgba(100,220,255,0.7);
+}
+
+/* ── Canvas area ── */
+#canvas-wrap { flex:1; position:relative; overflow:hidden; }
+canvas { display:block; }
+
+/* ── Ability bar ── */
+#ability-bar {
+  position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+  display:flex; gap:6px;
+}
+.ab-slot {
+  width:48px; height:48px; border-radius:6px; border:1.5px solid rgba(255,255,255,0.3);
+  background:rgba(0,5,30,0.85);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  font-family:'Orbitron',sans-serif; font-size:14px; font-weight:700;
+  position:relative; overflow:hidden;
+}
+.ab-slot.ready   { border-color:rgba(80,180,255,0.8); color:#fff; }
+.ab-slot.on-cd   { border-color:rgba(80,80,80,0.6);  color:#555; }
+.ab-slot .cd-text { font-size:10px; color:#f90; margin-top:2px; }
+.ab-slot .cd-overlay {
+  position:absolute; bottom:0; left:0; width:100%;
+  background:rgba(0,0,0,0.55); transition:height 0.1s linear;
+}
+.ab-key { font-size:16px; }
+.stack-dots { display:flex; gap:3px; margin-top:2px; }
+.stack-dot  { width:5px; height:5px; border-radius:50%; background:#fff; }
+
+/* ── Kill feed ── */
+#kill-feed {
+  position:absolute; top:12px; right:14px;
+  display:flex; flex-direction:column; gap:4px;
+  pointer-events:none;
+}
+.kill-entry {
+  background:rgba(0,0,0,0.7); border-left:3px solid #f9a825;
+  padding:4px 10px; font-size:12px; border-radius:0 4px 4px 0;
+  animation: slideIn 0.3s ease;
+  font-weight:600; letter-spacing:0.5px;
+}
+@keyframes slideIn {
+  from { transform:translateX(30px); opacity:0; }
+  to   { transform:translateX(0);    opacity:1; }
+}
+
+/* ── Legend / tips ── */
+#legend {
+  position:absolute; bottom:16px; left:14px;
+  font-size:11px; color:#889; line-height:1.9;
+  background:rgba(0,5,20,0.7); padding:8px 12px; border-radius:6px;
+  border:1px solid rgba(80,120,200,0.2);
+}
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="team-panel blue">
+    <span class="team-name">BLUE</span>
+    <span class="kda" id="blue-kda">0/0/0</span>
+    <span class="gold" id="blue-gold">💰 500g</span>
+    <span class="lvl" id="blue-lvl">Lv1</span>
+  </div>
+  <div id="clock">00:00</div>
+  <div class="team-panel red">
+    <span class="lvl" id="red-lvl">Lv1</span>
+    <span class="gold" id="red-gold">💰 500g</span>
+    <span class="kda" id="red-kda">0/0/0</span>
+    <span class="team-name">RED</span>
+  </div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="canvas"></canvas>
+
+  <!-- Ability Bar (assigned champion) -->
+  <div id="ability-bar">
+    <div class="ab-slot ready" id="ab-Q"><span class="ab-key">Q</span><span class="cd-text" id="ab-Q-cd"></span><div class="cd-overlay" id="ab-Q-ov" style="height:0%"></div><div class="stack-dots" id="q-dots"></div></div>
+    <div class="ab-slot ready" id="ab-W"><span class="ab-key">W</span><span class="cd-text" id="ab-W-cd"></span><div class="cd-overlay" id="ab-W-ov" style="height:0%"></div></div>
+    <div class="ab-slot ready" id="ab-E"><span class="ab-key">E</span><span class="cd-text" id="ab-E-cd"></span><div class="cd-overlay" id="ab-E-ov" style="height:0%"></div></div>
+    <div class="ab-slot ready" id="ab-R"><span class="ab-key">R</span><span class="cd-text" id="ab-R-cd"></span><div class="cd-overlay" id="ab-R-ov" style="height:0%"></div></div>
+    <div class="ab-slot ready" id="ab-D"><span class="ab-key">D</span><span class="cd-text" id="ab-D-cd"></span><div class="cd-overlay" id="ab-D-ov" style="height:0%"></div></div>
+  </div>
+
+  <div id="kill-feed"></div>
+
+  <div id="legend">
+    <b>Keys</b><br>
+    Click — Move &nbsp; Q/W/E/R — Ability<br>
+    D — Flash &nbsp; C — Circles &nbsp; P — Pause
+  </div>
+</div>
+
+<script>
+// ─── Config ─────────────────────────────────────────────────────
+const WS_URL = "ws://localhost:8765";
+const MAP_W  = 12800, MAP_H = 12800;
+
+// ─── State ──────────────────────────────────────────────────────
+let ws, assignedUid = null, state = null;
+let showCircles = true, paused = false, holdingD = false;
+let mouseWorld = [MAP_W/2, MAP_H/2];
+let particles = [];   // {x,y,vx,vy,r,life,maxLife,color}
+let lastKillFeed = [];
+
+// ─── Canvas ─────────────────────────────────────────────────────
+const wrap   = document.getElementById("canvas-wrap");
+const canvas = document.getElementById("canvas");
+const ctx    = canvas.getContext("2d");
+function resize() { canvas.width = wrap.clientWidth; canvas.height = wrap.clientHeight; }
+resize(); window.addEventListener("resize", resize);
+
+// ─── Camera ─────────────────────────────────────────────────────
+function wts(wx, wy) {   // world → screen
+  const s = Math.min(canvas.width, canvas.height) / MAP_W * 0.92;
+  const ox = (canvas.width  - MAP_W * s) / 2;
+  const oy = (canvas.height - MAP_H * s) / 2;
+  return [ox + wx * s, oy + (MAP_H - wy) * s, s];
+}
+function stw(sx, sy) {   // screen → world
+  const s = Math.min(canvas.width, canvas.height) / MAP_W * 0.92;
+  const ox = (canvas.width  - MAP_W * s) / 2;
+  const oy = (canvas.height - MAP_H * s) / 2;
+  return [(sx - ox) / s, MAP_H - (sy - oy) / s];
+}
+function scl() { return Math.min(canvas.width, canvas.height) / MAP_W * 0.92; }
+
+// ─── Particles ──────────────────────────────────────────────────
+function spawnParticles(wx, wy, count, color, speed=200, life=0.6) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = speed * (0.5 + Math.random() * 0.5);
+    particles.push({ wx, wy, vx: Math.cos(a)*v, vy: Math.sin(a)*v,
+                     r: 3 + Math.random()*3, life, maxLife: life, color });
+  }
+}
+
+function spawnFlashRipple(wx, wy, color) {
+  // concentric rings
+  particles.push({type:"ripple", wx, wy, r:0, maxR: FLASH_RANGE_PX(), life:0.5, maxLife:0.5, color});
+}
+
+function FLASH_RANGE_PX() { return 425 * scl(); }
+
+function updateParticles(dt) {
+  for (let p of particles) {
+    p.life -= dt;
+    if (p.type === "ripple") { p.r += (p.maxR / p.maxLife) * dt; continue; }
+    p.wx += p.vx * dt;
+    p.wy += p.vy * dt;   // wy in world units
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+function drawParticles() {
+  for (let p of particles) {
+    const alpha = p.life / p.maxLife;
+    if (p.type === "ripple") {
+      const [sx, sy] = wts(p.wx, p.wy);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(sx, sy, p.r, 0, Math.PI*2);
+      ctx.strokeStyle = p.color.replace(")", `,${alpha})`).replace("rgb","rgba");
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+      continue;
+    }
+    const [sx, sy] = wts(p.wx, p.wy);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(sx, sy, p.r * alpha, 0, Math.PI*2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ─── Map ────────────────────────────────────────────────────────
+function drawMap() {
+  // Deep background
+  const bg = ctx.createRadialGradient(canvas.width/2, canvas.height/2, 50,
+                                       canvas.width/2, canvas.height/2, canvas.width*0.8);
+  bg.addColorStop(0, "#0d1520");
+  bg.addColorStop(1, "#050810");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Bridge lane (glowing mid-line)
+  const [lx0,ly0] = wts(2800, 2800);
+  const [lx1,ly1] = wts(11000, 11000);
+  const lg = ctx.createLinearGradient(lx0, ly0, lx1, ly1);
+  lg.addColorStop(0,   "rgba(60,130,255,0.15)");
+  lg.addColorStop(0.5, "rgba(255,255,255,0.08)");
+  lg.addColorStop(1,   "rgba(255,60,60,0.15)");
+  ctx.beginPath();
+  ctx.moveTo(lx0, ly0); ctx.lineTo(lx1, ly1);
+  ctx.strokeStyle = lg; ctx.lineWidth = 80 * scl(); ctx.setLineDash([]);
+  ctx.stroke();
+
+  // Map border glow
+  const [x0,y0] = wts(0, 0);
+  const [x1,y1] = wts(MAP_W, MAP_H);
+  ctx.strokeStyle = "rgba(80,120,220,0.4)"; ctx.lineWidth = 1.5;
+  ctx.strokeRect(x0, y1, x1-x0, y0-y1);
+
+  // Grid dots
+  ctx.fillStyle = "rgba(100,140,200,0.07)";
+  for (let gx = 1000; gx < MAP_W; gx += 1000) {
+    for (let gy = 1000; gy < MAP_H; gy += 1000) {
+      const [sx, sy] = wts(gx, gy);
+      ctx.beginPath(); ctx.arc(sx, sy, 2, 0, Math.PI*2); ctx.fill();
+    }
+  }
+}
+
+// ─── Glow circle helper ─────────────────────────────────────────
+function glowCircle(sx, sy, r, color, alpha=1.0, glowSize=20) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const g = ctx.createRadialGradient(sx, sy, r*0.5, sx, sy, r + glowSize);
+  g.addColorStop(0,   color.replace(")",`,0.5)`).replace("rgb","rgba"));
+  g.addColorStop(1,   "rgba(0,0,0,0)");
+  ctx.beginPath(); ctx.arc(sx, sy, r + glowSize, 0, Math.PI*2);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI*2);
+  ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
+
+function dashCircle(wx, wy, wr, color, dash=[5,4], lw=1.2) {
+  const [sx, sy, s] = wts(wx, wy);
+  const sr = wr * s;
+  if (sr < 2) return;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI*2);
+  ctx.setLineDash(dash); ctx.strokeStyle = color; ctx.lineWidth = lw;
+  ctx.stroke(); ctx.restore();
+}
+
+function fillCircle(wx, wy, wr, color) {
+  const [sx, sy, s] = wts(wx, wy);
+  const sr = wr * s;
+  if (sr < 2) return;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI*2);
+  ctx.fillStyle = color; ctx.fill(); ctx.restore();
+}
+
+// ─── HP bar ─────────────────────────────────────────────────────
+function drawHPBar(wx, wy, pct, w_units, offsetYpx) {
+  const [sx, sy, s] = wts(wx, wy);
+  const bw = w_units * s, bh = 6;
+  const x = sx - bw/2, y = sy + offsetYpx;
+  ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(x-1, y-1, bw+2, bh+2);
+  const clr = pct > 0.5
+    ? `hsl(${Math.round(120*pct)},90%,45%)`
+    : `hsl(${Math.round(60*(pct/0.5))},90%,45%)`;
+  ctx.fillStyle = clr;
+  ctx.fillRect(x, y, bw * Math.max(0, pct), bh);
+}
+
+// ─── Champion ────────────────────────────────────────────────────
+function drawChampion(c) {
+  if (!c.alive) return;
+  const [sx, sy, s] = wts(c.pos[0], c.pos[1]);
+  const gr = c.gameplay_r * s;
+  const color = c.team === "blue" ? "rgb(60,180,255)" : "rgb(255,80,80)";
+  const dim   = c.team === "blue" ? "rgba(60,180,255," : "rgba(255,80,80,";
+
+  // Range circles
+  if (showCircles) {
+    fillCircle(c.pos[0], c.pos[1], c.attack_range, "rgba(255,200,40,0.04)");
+    dashCircle(c.pos[0], c.pos[1], c.attack_range,   "rgba(255,200,40,0.6)", [6,4]);
+    dashCircle(c.pos[0], c.pos[1], c.pathfinding_r,  "rgba(100,180,255,0.55)",[3,3]);
+    dashCircle(c.pos[0], c.pos[1], c.gameplay_r,     "rgba(255,100,100,0.7)", [4,2]);
+    dashCircle(c.pos[0], c.pos[1], c.acquisition_r,  "rgba(200,200,200,0.15)",[4,4]);
+  }
+
+  // Flash range preview (hold D)
+  if (holdingD && c.uid === assignedUid) {
+    fillCircle(c.pos[0], c.pos[1], c.flash_range, "rgba(255,255,255,0.05)");
+    dashCircle(c.pos[0], c.pos[1], c.flash_range, "rgba(255,255,255,0.5)", [5,3]);
+  }
+
+  // Glow body
+  glowCircle(sx, sy, Math.max(5, gr), color, 1.0, gr * 0.8);
+
+  // Border ring
+  ctx.beginPath(); ctx.arc(sx, sy, Math.max(5, gr), 0, Math.PI*2);
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // Yasuo "Y" label
+  ctx.save();
+  ctx.font = `bold ${Math.max(10, gr * 0.9)}px Rajdhani`;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff";
+  ctx.fillText("Y", sx, sy);
+  ctx.restore();
+
+  // HP bar
+  drawHPBar(c.pos[0], c.pos[1], c.hp/c.max_hp, 140, -(gr + 18));
+
+  // Level badge
+  const [lsx, lsy] = wts(c.pos[0], c.pos[1]);
+  ctx.save();
+  ctx.fillStyle = dim + "0.8)";
+  ctx.beginPath(); ctx.arc(lsx + gr + 2, lsy - gr, 10, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.font = "bold 9px Rajdhani";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(c.level, lsx + gr + 2, lsy - gr);
+  ctx.restore();
+
+  // CC effects
+  if (c.is_airborne) {
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,100,0.9)";
+    ctx.font = "11px Rajdhani"; ctx.textAlign = "center";
+    ctx.fillText("⬆ AIR", sx, sy - gr - 24);
+    ctx.restore();
+  }
+}
+
+// ─── Minion ──────────────────────────────────────────────────────
+const MTYPE_COLOR = {
+  melee:  { body:"rgb(40,120,220)",  border:"rgba(100,180,255,0.9)" },
+  caster: { body:"rgb(30,90,190)",   border:"rgba(80,150,255,0.9)" },
+  cannon: { body:"rgb(180,120,20)",  border:"rgba(255,200,50,0.9)" },
+  super:  { body:"rgb(180,50,180)",  border:"rgba(255,120,255,0.9)" },
+};
+function drawMinion(m) {
+  if (!m.alive) return;
+  const isBlue = m.team === "blue";
+  const [sx, sy, s] = wts(m.pos[0], m.pos[1]);
+  const gr = m.gameplay_r * s;
+  const mt = m.mtype;
+  const mc = isBlue
+    ? (MTYPE_COLOR[mt] || { body:"rgb(40,100,200)", border:"rgba(80,160,255,0.8)" })
+    : { body: (MTYPE_COLOR[mt]?.body||"").replace(/\d+,\d+,\d+/, "200,60,60"),
+        border:"rgba(255,110,110,0.8)" };
+
+  if (showCircles) {
+    dashCircle(m.pos[0], m.pos[1], m.attack_range,   "rgba(255,200,40,0.3)", [3,3]);
+    dashCircle(m.pos[0], m.pos[1], m.pathfinding_r,  "rgba(100,160,255,0.3)",[2,2]);
+  }
+
+  glowCircle(sx, sy, Math.max(3, gr), mc.body, 1.0, gr * 0.5);
+  ctx.beginPath(); ctx.arc(sx, sy, Math.max(3, gr), 0, Math.PI*2);
+  ctx.strokeStyle = mc.border; ctx.lineWidth = 1.2; ctx.stroke();
+
+  // type glyph
+  const glyph = {melee:"⚔",caster:"✦",cannon:"💥",super:"★"}[mt] || "·";
+  ctx.save();
+  ctx.font = `${Math.max(7, gr * 0.85)}px Rajdhani`;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff"; ctx.fillText(glyph, sx, sy);
+  ctx.restore();
+
+  drawHPBar(m.pos[0], m.pos[1], m.hp/m.max_hp, 60, -(gr + 10));
+}
+
+// ─── Turret ───────────────────────────────────────────────────────
+function drawTurret(t) {
+  if (!t.alive) return;
+  const [sx, sy, s] = wts(t.pos[0], t.pos[1]);
+  const gr = t.gameplay_r * s;
+  const isBlue = t.team === "blue";
+  const color  = isBlue ? "rgb(20,90,200)" : "rgb(200,30,30)";
+  const rangeC = isBlue ? "rgba(50,130,255," : "rgba(255,50,50,";
+
+  // Attack range fill + ring
+  if (showCircles) {
+    fillCircle(t.pos[0], t.pos[1], t.attack_range, rangeC + "0.05)");
+    dashCircle(t.pos[0], t.pos[1], t.attack_range, rangeC + "0.5)",  [8,5], 1.5);
+    dashCircle(t.pos[0], t.pos[1], t.gameplay_r,   "rgba(255,100,100,0.6)", [4,2]);
+  }
+
+  // turret body — octagon-ish
+  glowCircle(sx, sy, Math.max(6, gr), color, 1.0, gr * 0.7);
+
+  // Draw 8-pointed shape on top
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.fillStyle = isBlue ? "rgba(80,180,255,0.8)" : "rgba(255,80,80,0.8)";
+  ctx.beginPath();
+  for (let i=0; i<8; i++) {
+    const a = (i/8) * Math.PI*2 - Math.PI/8;
+    const rr = i%2===0 ? gr : gr*0.65;
+    ctx[i===0?"moveTo":"lineTo"](Math.cos(a)*rr, Math.sin(a)*rr);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.restore();
+
+  // HP bar
+  drawHPBar(t.pos[0], t.pos[1], t.hp/t.max_hp, 100, -(gr + 14));
+
+  // Vanguard shield glow
+  if (t.vanguard_hp > 0 && !t.invuln) {
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath(); ctx.arc(sx, sy, gr + 6, 0, Math.PI*2);
+    ctx.strokeStyle = "#88ccff"; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.restore();
+  }
+
+  // Invuln star
+  if (t.invuln) {
+    ctx.save();
+    ctx.fillStyle = "#ffff33"; ctx.font = `${gr}px Rajdhani`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("∞", sx, sy);
+    ctx.restore();
+  }
+}
+
+// ─── Wind Wall ────────────────────────────────────────────────────
+function drawWindWall(w) {
+  const [sx, sy, s] = wts(w.center[0], w.center[1]);
+  const hw = (w.width / 2) * s;
+  ctx.save();
+  const g = ctx.createLinearGradient(sx-hw, sy, sx+hw, sy);
+  g.addColorStop(0,   "rgba(160,220,255,0)");
+  g.addColorStop(0.5, "rgba(200,240,255,0.7)");
+  g.addColorStop(1,   "rgba(160,220,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(sx-hw, sy-30, hw*2, 60);
+  ctx.strokeStyle = "rgba(150,220,255,0.95)"; ctx.lineWidth = 2.5;
+  ctx.strokeRect(sx-hw, sy-30, hw*2, 60);
+  // TTL
+  ctx.fillStyle = "rgba(200,240,255,0.9)"; ctx.font = "bold 11px Rajdhani";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(`W  ${w.ttl.toFixed(1)}s`, sx, sy);
+  ctx.restore();
+}
+
+// ─── Projectile ───────────────────────────────────────────────────
+function drawProjectile(p) {
+  const [sx, sy, s] = wts(p.pos[0], p.pos[1]);
+  const r = Math.max(3, (p.width / 2) * s);
+  const isBlue = p.team === "blue";
+  const color  = isBlue ? "rgb(160,220,255)" : "rgb(255,160,160)";
+
+  if (p.spell === "Q3") {
+    // Tornado: spinning ring
+    const t = Date.now() / 200;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(t);
+    ctx.beginPath(); ctx.arc(0, 0, r*2, 0, Math.PI*2);
+    ctx.strokeStyle = isBlue ? "rgba(100,200,255,0.9)" : "rgba(255,100,100,0.9)";
+    ctx.lineWidth = 3; ctx.setLineDash([6,4]); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  glowCircle(sx, sy, r, color, 0.9, r * 1.5);
+
+  // Trail
+  const tdir = p.direction || [0,1];
+  const trailLen = 30 * s / MAP_W * canvas.width;
+  const [tx, ty] = wts(
+    p.pos[0] - tdir[0] * 400,
+    p.pos[1] - tdir[1] * 400,
+  );
+  const trailGrad = ctx.createLinearGradient(tx, ty, sx, sy);
+  const alpha = isBlue ? "rgba(60,160,255," : "rgba(255,60,60,";
+  trailGrad.addColorStop(0, alpha+"0)");
+  trailGrad.addColorStop(1, alpha+"0.5)");
+  ctx.beginPath();
+  ctx.moveTo(tx, ty); ctx.lineTo(sx, sy);
+  ctx.strokeStyle = trailGrad; ctx.lineWidth = r*1.5; ctx.stroke();
+
+  // Spell label
+  ctx.save();
+  ctx.fillStyle = "#fff"; ctx.font = "bold 9px Orbitron";
+  ctx.textAlign = "center"; ctx.fillText(p.spell, sx, sy - r - 3);
+  ctx.restore();
+}
+
+// ─── Kill Feed ─────────────────────────────────────────────────────
+function updateKillFeed() {
+  if (!state || !state.kill_feed) return;
+  const feed = state.kill_feed;
+  if (JSON.stringify(feed) === JSON.stringify(lastKillFeed)) return;
+  lastKillFeed = [...feed];
+  const el = document.getElementById("kill-feed");
+  el.innerHTML = "";
+  feed.slice(-5).reverse().forEach(ev => {
+    const div = document.createElement("div");
+    div.className = "kill-entry";
+    div.textContent = `t=${ev.t}s  ${ev.killer} ☠ ${ev.victim}`;
+    el.appendChild(div);
+  });
+}
+
+// ─── Ability Bar (HUD) ─────────────────────────────────────────────
+const AB_MAX_CD = { Q:6, W:26, E:0.5, R:80, D:300 };
+function updateAbilityBar() {
+  if (!state || !assignedUid) return;
+  const champ = state.champions.find(c => c.uid === assignedUid);
+  if (!champ) return;
+  const map = { Q: champ.q_cd, W: champ.w_cd, E: champ.e_cd, R: champ.r_cd, D: champ.flash_cd };
+  const maxes = { Q: 6, W:26, E:0.5, R:80, D:300 };
+  for (const [k, cd] of Object.entries(map)) {
+    const slot  = document.getElementById(`ab-${k}`);
+    const cdtxt = document.getElementById(`ab-${k}-cd`);
+    const ov    = document.getElementById(`ab-${k}-ov`);
+    if (!slot) continue;
+    if (cd > 0) {
+      slot.className = "ab-slot on-cd";
+      cdtxt.textContent = cd.toFixed(1) + "s";
+      ov.style.height = Math.min(100, (cd / (maxes[k]||cd)) * 100) + "%";
+    } else {
+      slot.className = "ab-slot ready";
+      cdtxt.textContent = "";
+      ov.style.height = "0%";
+    }
+  }
+  // Q stacks
+  const dots = document.getElementById("q-dots");
+  dots.innerHTML = "";
+  for (let i = 0; i < (champ.q_stacks || 0); i++) {
+    const d = document.createElement("div"); d.className = "stack-dot"; dots.appendChild(d);
+  }
+}
+
+// ─── HUD ───────────────────────────────────────────────────────────
+function updateHUD() {
+  if (!state) return;
+  const mm = String(Math.floor(state.t/60)).padStart(2,"0");
+  const ss = String(Math.floor(state.t%60)).padStart(2,"0");
+  document.getElementById("clock").textContent = `${mm}:${ss}`;
+  state.champions.forEach(c => {
+    const p = c.team;
+    document.getElementById(`${p}-kda`).textContent  = `${c.kills}/${c.deaths}/${c.assists}`;
+    document.getElementById(`${p}-gold`).textContent = `💰 ${c.gold}g`;
+    document.getElementById(`${p}-lvl`).textContent  = `Lv${c.level}`;
+  });
+}
+
+// ─── WebSocket ──────────────────────────────────────────────────────
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen    = () => {};
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "init") { assignedUid = msg.assigned_uid; return; }
+    state = msg;
+  };
+  ws.onclose = () => setTimeout(connect, 2000);
+}
+
+function send(action) {
+  if (ws && ws.readyState === WebSocket.OPEN && !paused)
+    ws.send(JSON.stringify({ uid: assignedUid, action }));
+}
+
+// ─── Input ──────────────────────────────────────────────────────────
+canvas.addEventListener("click", e => {
+  const r = canvas.getBoundingClientRect();
+  const [wx,wy] = stw(e.clientX-r.left, e.clientY-r.top);
+  send({ type:"move", world:[wx,wy] });
+
+  // move click particles
+  spawnParticles(wx, wy, 8, "rgb(255,255,255)", 300 / scl(), 0.4);
+});
+
+canvas.addEventListener("mousemove", e => {
+  const r = canvas.getBoundingClientRect();
+  mouseWorld = stw(e.clientX-r.left, e.clientY-r.top);
+});
+
+document.addEventListener("keydown", e => {
+  const k = e.key.toUpperCase();
+  if (k === "C") { showCircles = !showCircles; return; }
+  if (k === "P") { paused = !paused; return; }
+  if (k === "D") holdingD = true;
+
+  if (["Q","W","E","R","D"].includes(k)) {
+    send({ type:k, world: mouseWorld });
+
+    // Spawn ability cast flash
+    const champ = state?.champions?.find(c => c.uid === assignedUid);
+    if (champ) {
+      if (k === "D") {
+        spawnFlashRipple(champ.pos[0], champ.pos[1],
+          champ.team === "blue" ? "rgb(100,200,255)" : "rgb(255,100,100)");
+        spawnParticles(champ.pos[0], champ.pos[1], 20,
+          champ.team === "blue" ? "rgb(100,200,255)" : "rgb(255,100,100)",
+          600/scl(), 0.5);
+      }
+      if (k === "E") {
+        // E dash particle trail
+        spawnParticles(champ.pos[0], champ.pos[1], 15, "rgb(200,255,255)", 400/scl(), 0.4);
+      }
+    }
+  }
+});
+
+document.addEventListener("keyup", e => {
+  if (e.key.toUpperCase() === "D") holdingD = false;
+});
+
+// ─── Main loop ──────────────────────────────────────────────────────
+let lastTime = null;
+function renderLoop(ts) {
+  const dt = lastTime ? Math.min((ts - lastTime) / 1000, 0.05) : 0;
+  lastTime = ts;
+
+  updateParticles(dt);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawMap();
+
+  if (state) {
+    state.turrets.forEach(t => { if (t.alive) drawTurret(t); });
+    state.wind_walls.forEach(w => drawWindWall(w));
+    state.minions.forEach(m => drawMinion(m));
+    state.champions.forEach(c => drawChampion(c));
+    state.projectiles.forEach(p => drawProjectile(p));
+    drawParticles();
+
+    updateHUD();
+    updateKillFeed();
+    updateAbilityBar();
+  }
+
+  requestAnimationFrame(renderLoop);
+}
+
+connect();
+requestAnimationFrame(renderLoop);
+</script>
+</body>
+</html>
