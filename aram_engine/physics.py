@@ -170,3 +170,13 @@ def point_segment_dist(p: Vec2, a: Vec2, b: Vec2) -> float:
 def line_hitbox_hit(p: Vec2, seg_a: Vec2, seg_b: Vec2, half_width: float, target_radius: float) -> bool:
     """Check if a capsule (line + width) hits a circle target."""
     return point_segment_dist(p, seg_a, seg_b) <= half_width + target_radius
+def ccw(A: Vec2, B: Vec2, C: Vec2) -> bool:
+    """Kiểm tra 3 điểm A, B, C có ngược chiều kim đồng hồ không."""
+    return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+
+def segments_intersect(A: Vec2, B: Vec2, C: Vec2, D: Vec2) -> bool:
+    """
+    Kiểm tra 2 đoạn thẳng AB và CD có cắt nhau hay không.
+    Dùng để kiểm tra Đường Đạn (AB) cắt Tường Gió (CD).
+    """
+    return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)

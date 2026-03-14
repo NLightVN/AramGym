@@ -22,6 +22,7 @@ class Champion:
         self.pos         = start_pos or (0.0, 0.0)
         self.facing      = (1.0, 0.0)
         self.move_target = None
+        self.q_buffer_timer = 0.0
 
         # ── Radii ──────────────────────────────────
         self.gameplay_radius    = CHAMPION_GAMEPLAY_RADIUS
@@ -103,21 +104,27 @@ class Champion:
         lvl = self.level
         self.max_hp    = yasuo_stat_at_level(s["base_hp"],    s["hp_growth"], lvl)
         self.hp        = self.max_hp
-        self.max_mana  = s["base_mp"]     # Wind (no growth)
-        self.mana      = self.max_mana
+        self.max_mana  = s["base_mp"]     # Flow (Max 100)
+        self.mana      = 0.0              # Khởi đầu trận Flow = 0
         self.ad        = yasuo_stat_at_level(s["base_ad"],    s["ad_growth"], lvl)
         self.armor     = yasuo_stat_at_level(s["base_armor"], s["armor_growth"], lvl)
         self.mr        = yasuo_stat_at_level(s["base_mr"],    s["mr_growth"], lvl)
         self.base_ms   = s["base_ms"]
         self.attack_range = s["attack_range"]
         self.acquisition_range = s["acquisition_range"]
-        # AS: base + ratio*(level-1)%
+        
+        # Công thức Attack Speed chuẩn LMHT
         self.base_as   = s["base_as"]
-        self.bonus_as  = s["as_ratio"] * (lvl - 1)
-        self.attack_speed = min(self.base_as * (1 + self.bonus_as), 2.5)
-        # regen
+        # Bonus AS từ cấp độ
+        from ..constants import _growth_factor
+        self.bonus_as_pct = s["as_growth"] * _growth_factor(lvl)
+        if lvl == 1:
+            self.bonus_as_pct += 0.04  # Level 1 được tặng 4% AS mặc định
+            
+        self.attack_speed = min(self.base_as + s["as_ratio"] * self.bonus_as_pct, 2.5)
+        
+        # Regen
         self.hp_regen  = yasuo_stat_at_level(s["base_hp_regen"], s["hp_regen_growth"], lvl)
-
     def _xp_to_next_level(self, lvl: int) -> float:
         """Approximate XP required to go from lvl to lvl+1."""
         base = [0, 280, 660, 1140, 1720, 2400, 3180, 4060, 5040,
@@ -126,6 +133,8 @@ class Champion:
         return float(base[lvl])
 
     def update(self, dt: float):
+        if self.q_buffer_timer > 0:
+            self.q_buffer_timer -= dt
         if not self.alive:
             self.respawn_timer -= dt
             if self.respawn_timer <= 0:

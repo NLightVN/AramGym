@@ -119,7 +119,7 @@ class GameLoop:
         self.running   = False
         self.clients   = set()      # connected WebSocket clients
         self._input_queue = []      # (uid, action_dict)
-
+        self.game_time = 0.0 
     # ── Input from clients ───────────────────────────────────────
     def enqueue_input(self, champ_uid: int, action: dict):
         self._input_queue.append((champ_uid, action))
@@ -163,7 +163,7 @@ class GameLoop:
     def _update(self):
         gs = self.gs
         dt = TICK_DT
-
+        self.game_time += dt
         # 1. Process player inputs
         self._process_inputs()
 
@@ -185,7 +185,7 @@ class GameLoop:
             allys  = [c for c in gs.champions.values() if c.team == team and c.alive]
             allys += [m for m in gs.minions       if m.team == team and m.alive]
             enemys = gs.get_enemies(team)
-            turret.update(dt, allys, enemys)
+            turret.update(dt, allys, enemys, self.game_time)
 
         # 6. Update projectiles
         for proj in gs.projectiles:
@@ -261,11 +261,14 @@ def _closest_airborne_enemy(champ, gs):
     from .physics import vec_dist
     best, best_d = None, float("inf")
     for e in gs.get_enemies(champ.team):
-        if not e.is_airborne: continue
-        if vec_dist(champ.pos, e.pos) > 1200: continue
+        if not getattr(e, 'is_airborne', False):
+            continue
         d = vec_dist(champ.pos, e.pos)
+        if d > 1200:
+            continue
         if d < best_d:
-            best_d = d; best = e
+            best_d = d
+            best = e
     return best
 
 

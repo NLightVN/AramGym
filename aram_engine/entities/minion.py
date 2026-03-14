@@ -76,7 +76,7 @@ class Minion:
         # AI state
         self.waypoint_idx = 0
         self.waypoints    = MINION_WAYPOINTS[team]
-        self.target       = None      # target entity
+        self.target       = None
         self.ignored_uids = set()
         self.fail_timer   = 0.0
         self.sweep_timer  = 0.0
@@ -87,7 +87,6 @@ class Minion:
         if self.mtype == "super":
             return stats["gold"]
         if self.mtype == "cannon":
-            # +3 gold per appearance (approx: wave_num * 3)
             wave_n = int((game_time - FIRST_WAVE_TIME) / WAVE_INTERVAL / CANNON_EVERY_N)
             return min(stats["gold"] + wave_n * 3, stats.get("gold_max", 999))
         intervals = int(game_time / stats.get("gold_growth_interval", 90))
@@ -128,7 +127,7 @@ class Minion:
             if not getattr(self.target, 'alive', True) or self.target.uid in self.ignored_uids:
                 self.target = None
             elif vec_dist(self.pos, self.target.pos) > MINION_DROP_RANGE:
-                self.target = None   # drop aggro
+                self.target = None
             else:
                 if not self._in_attack_range(self.target):
                     self.fail_timer += MINION_SWEEP_TICK
@@ -140,6 +139,7 @@ class Minion:
                         self.move_toward(self.target.pos)
                 else:
                     self.fail_timer = 0.0
+                    self.move_target = None  # dừng lại khi trong tầm đánh
                     self._attack(self.target)
                 return
 
@@ -147,11 +147,12 @@ class Minion:
         if gs:
             new_target = self._find_target(gs)
             if new_target:
-                self.target    = new_target
+                self.target     = new_target
                 self.fail_timer = 0.0
                 if not self._in_attack_range(new_target):
                     self.move_toward(new_target.pos)
                 else:
+                    self.move_target = None  # dừng lại khi trong tầm đánh
                     self._attack(new_target)
                 return
 
@@ -176,60 +177,60 @@ class Minion:
         self.move_target = dest
 
     def _find_target(self, gs) -> object:
-        """7-level priority system from Riot spec."""
+        """7-level priority system từ Riot spec + Priority 8 (Công trình)."""
         enemies = gs.get_enemies(self.team)
         allies  = gs.get_allies(self.team)
+
         candidates = [e for e in enemies
                       if e.uid not in self.ignored_uids
                       and getattr(e, 'alive', True)
                       and vec_dist(self.pos, e.pos) <= MINION_ACQUIRE_RANGE]
 
+        def _get_target_uid(e):
+            if hasattr(e, 'attack_target_uid') and e.attack_target_uid is not None:
+                return e.attack_target_uid
+            if hasattr(e, 'attack_target') and getattr(e, 'attack_target', None) is not None:
+                if hasattr(e.attack_target, 'uid'):
+                    return e.attack_target.uid
+                return e.attack_target
+            return None
+
         def _is_attacking_ally_champ(e):
-            tgt = getattr(e, 'attack_target', None)
-            if tgt is None: return False
-            return any(a.uid == tgt.uid
-                       and a.__class__.__name__ == "Champion"
-                       for a in allies)
+            tgt_uid = _get_target_uid(e)
+            if tgt_uid is None: return False
+            return any(a.uid == tgt_uid for a in allies if a.__class__.__name__ == "Champion")
 
         def _is_attacking_ally_minion(e):
-            tgt = getattr(e, 'attack_target', None)
-            if tgt is None: return False
-            return any(a.uid == tgt.uid
-                       and a.__class__.__name__ == "Minion"
-                       for a in allies)
+            tgt_uid = _get_target_uid(e)
+            if tgt_uid is None: return False
+            return any(a.uid == tgt_uid for a in allies if a.__class__.__name__ == "Minion")
 
-        # Priority 1: enemy CHAMP attacking ALLY CHAMP
-        p1 = [e for e in candidates
-              if e.__class__.__name__ == "Champion" and _is_attacking_ally_champ(e)]
-        if p1: return min(p1, key=lambda e: vec_dist(self.pos, e.pos))
+        is_hitting_turret = (self.target and self.target.__class__.__name__ == "Turret")
 
-        # Priority 2: enemy MINION attacking ALLY CHAMP
-        p2 = [e for e in candidates
-              if e.__class__.__name__ == "Minion" and _is_attacking_ally_champ(e)]
+        if not is_hitting_turret:
+            p1 = [e for e in candidates if e.__class__.__name__ == "Champion" and _is_attacking_ally_champ(e)]
+            if p1: return min(p1, key=lambda e: vec_dist(self.pos, e.pos))
+
+        p2 = [e for e in candidates if e.__class__.__name__ == "Minion" and _is_attacking_ally_champ(e)]
         if p2: return min(p2, key=lambda e: vec_dist(self.pos, e.pos))
 
-        # Priority 3: enemy MINION attacking ALLY MINION
-        p3 = [e for e in candidates
-              if e.__class__.__name__ == "Minion" and _is_attacking_ally_minion(e)]
+        p3 = [e for e in candidates if e.__class__.__name__ == "Minion" and _is_attacking_ally_minion(e)]
         if p3: return min(p3, key=lambda e: vec_dist(self.pos, e.pos))
 
-        # Priority 4: enemy TURRET attacking ALLY MINION
-        p4 = [e for e in candidates
-              if e.__class__.__name__ == "Turret" and _is_attacking_ally_minion(e)]
+        p4 = [e for e in candidates if e.__class__.__name__ == "Turret" and _is_attacking_ally_minion(e)]
         if p4: return min(p4, key=lambda e: vec_dist(self.pos, e.pos))
 
-        # Priority 5: enemy CHAMP attacking ALLY MINION
-        p5 = [e for e in candidates
-              if e.__class__.__name__ == "Champion" and _is_attacking_ally_minion(e)]
+        p5 = [e for e in candidates if e.__class__.__name__ == "Champion" and _is_attacking_ally_minion(e)]
         if p5: return min(p5, key=lambda e: vec_dist(self.pos, e.pos))
 
-        # Priority 6: closest enemy MINION
         p6 = [e for e in candidates if e.__class__.__name__ == "Minion"]
         if p6: return min(p6, key=lambda e: vec_dist(self.pos, e.pos))
 
-        # Priority 7: closest enemy CHAMP
         p7 = [e for e in candidates if e.__class__.__name__ == "Champion"]
         if p7: return min(p7, key=lambda e: vec_dist(self.pos, e.pos))
+
+        p8 = [e for e in candidates if e.__class__.__name__ == "Turret"]
+        if p8: return min(p8, key=lambda e: vec_dist(self.pos, e.pos))
 
         return None
 
@@ -238,7 +239,10 @@ class Minion:
 
     def on_collision(self):
         self.ignored_uids.clear()
-
+    def apply_cc(self, cc_type: str, duration: float):
+        setattr(self, f"is_{cc_type}", True)
+        self.cc_timers[cc_type] = duration
+        self.move_target = None
     def on_death(self, game_time: float):
         self.alive = False
 
@@ -263,31 +267,47 @@ class Minion:
 # ─────────────────────────────────────────────────
 class WaveSpawner:
     def __init__(self):
-        self.next_wave_time = FIRST_WAVE_TIME
-        self.wave_number    = 0          # starts at 1 on first spawn
+        self.next_wave_time = 30.0
+        self.wave_number    = 0
 
     def update(self, game_time: float, gs) -> list:
-        """Returns list of new Minion objects if it's wave time."""
         new_minions = []
         if game_time >= self.next_wave_time:
             self.wave_number += 1
-            self.next_wave_time += WAVE_INTERVAL
-            is_cannon = (self.wave_number % CANNON_EVERY_N == 0)
+
+            if game_time < 14 * 60:
+                self.next_wave_time += 30.0
+            elif game_time < 30 * 60:
+                self.next_wave_time += 25.0
+            else:
+                self.next_wave_time += 20.0
+
+            is_cannon = False
+            if game_time < 14 * 60:
+                is_cannon = (self.wave_number % 3 == 0)
+            elif game_time < 25 * 60:
+                is_cannon = (self.wave_number % 2 == 0)
+            else:
+                is_cannon = True
+
+            num_casters = 2 if game_time >= 30 * 60 else 3
+            num_melees  = 2 if (game_time >= 14 * 60 and is_cannon) else 3
 
             for team in ("blue", "red"):
                 spawn_pos = gs.barracks_pos(team)
-                # 3 melee
-                for i in range(WAVE_COMPOSITION["melee"]):
+
+                for i in range(num_melees):
                     offset = (i * 80 - 80, 0)
                     pos = (spawn_pos[0] + offset[0], spawn_pos[1] + offset[1])
                     new_minions.append(Minion(team, "melee", pos, game_time))
-                # 3 caster
-                for i in range(WAVE_COMPOSITION["caster"]):
+
+                for i in range(num_casters):
                     offset = (i * 80 - 80, 100)
                     pos = (spawn_pos[0] + offset[0], spawn_pos[1] + offset[1])
                     new_minions.append(Minion(team, "caster", pos, game_time))
-                # cannon (replaces 1 minion slot on cannon waves)
+
                 if is_cannon:
                     pos = (spawn_pos[0], spawn_pos[1] - 100)
                     new_minions.append(Minion(team, "cannon", pos, game_time))
+
         return new_minions
